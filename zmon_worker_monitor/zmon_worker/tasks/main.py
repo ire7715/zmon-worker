@@ -1159,7 +1159,7 @@ class MainTask(object):
             else:
                 self._cleanup_alert(p, alert_id)
 
-        current_span.log_kv('cleanup_entities', kwargs.get('cleanup_entities', []))
+        current_span.log_kv({'cleanup_entities': kwargs.get('cleanup_entities', [])})
         for entity_id in kwargs.get('cleanup_entities', []):
             alert_ids = [a.replace('zmon:alerts:', '').replace(':{}'.format(entity_id), '')
                          for a in self.con.keys('zmon:alerts:*:{}'.format(entity_id))]

@@ -1104,80 +1104,79 @@ class MainTask(object):
     @trace()
     def cleanup(self, *args, **kwargs):
         span = extract_span_from_kwargs(**kwargs)
-        with span:
-            self.task_context = kwargs.get('task_context')
-            p = self.con.pipeline()
-            p.smembers('zmon:checks')
-            p.smembers('zmon:alerts')
-            check_ids, alert_ids = p.execute()
+        self.task_context = kwargs.get('task_context')
+        p = self.con.pipeline()
+        p.smembers('zmon:checks')
+        p.smembers('zmon:alerts')
+        check_ids, alert_ids = p.execute()
 
-            for check_id in kwargs.get('disabled_checks', {}):
+        for check_id in kwargs.get('disabled_checks', {}):
+            self._cleanup_check(p, check_id)
+
+        for alert_id in kwargs.get('disabled_alerts', {}):
+            self._cleanup_alert(p, alert_id)
+
+        for check_id in check_ids:
+            if check_id in kwargs.get('check_entities', {}):
+                redis_entities = self.con.smembers('zmon:checks:{}'.format(check_id))
+                check_entities = set(kwargs['check_entities'][check_id])
+
+                # If it happens that we remove all entities for given check, we should remove all the things.
+                if not check_entities:
+                    p.srem('zmon:checks', check_id)
+                    p.delete('zmon:checks:{}'.format(check_id))
+                    for entity in redis_entities:
+                        p.delete('zmon:checks:{}:{}'.format(check_id, entity))
+                else:
+                    self._cleanup_common(p, 'checks', check_id, redis_entities - check_entities)
+            else:
+
                 self._cleanup_check(p, check_id)
 
-            for alert_id in kwargs.get('disabled_alerts', {}):
+        for alert_id in alert_ids:
+            if alert_id in kwargs.get('alert_entities', {}):
+                # Entities that are in the alert state.
+                redis_entities = self.con.smembers('zmon:alerts:{}'.format(alert_id))
+                alert_entities = set(kwargs['alert_entities'][alert_id])
+
+                # If it happens that we remove all entities for given alert, we should remove all the things.
+                if not alert_entities:
+                    p.srem('zmon:alerts', alert_id)
+                    p.delete('zmon:alerts:{}'.format(alert_id))
+                    p.delete('zmon:alerts:{}:entities'.format(alert_id))
+                    for entity in redis_entities:
+                        p.delete('zmon:alerts:{}:{}'.format(alert_id, entity))
+                        p.delete('zmon:notifications:{}:{}'.format(alert_id, entity))
+                else:
+                    self._cleanup_common(p, 'alerts', alert_id, redis_entities - alert_entities)
+                    # All entities matching given alert definition.
+                    all_entities = set(self.con.hkeys('zmon:alerts:{}:entities'.format(alert_id)))
+                    for entity in all_entities - alert_entities:
+                        self.logger.info('Removing entity %s from hash %s', entity,
+                                         'zmon:alerts:{}:entities'.format(alert_id))
+                        p.hdel('zmon:alerts:{}:entities'.format(alert_id), entity)
+                        p.delete('zmon:notifications:{}:{}'.format(alert_id, entity))
+            else:
                 self._cleanup_alert(p, alert_id)
 
-            for check_id in check_ids:
-                if check_id in kwargs.get('check_entities', {}):
-                    redis_entities = self.con.smembers('zmon:checks:{}'.format(check_id))
-                    check_entities = set(kwargs['check_entities'][check_id])
-
-                    # If it happens that we remove all entities for given check, we should remove all the things.
-                    if not check_entities:
-                        p.srem('zmon:checks', check_id)
-                        p.delete('zmon:checks:{}'.format(check_id))
-                        for entity in redis_entities:
-                            p.delete('zmon:checks:{}:{}'.format(check_id, entity))
-                    else:
-                        self._cleanup_common(p, 'checks', check_id, redis_entities - check_entities)
-                else:
-
-                    self._cleanup_check(p, check_id)
-
+        span.log_kv('cleanup_entities', kwargs.get('cleanup_entities', []))
+        for entity_id in kwargs.get('cleanup_entities', []):
+            alert_ids = [a.replace('zmon:alerts:', '').replace(':{}'.format(entity_id), '')
+                         for a in self.con.keys('zmon:alerts:*:{}'.format(entity_id))]
             for alert_id in alert_ids:
-                if alert_id in kwargs.get('alert_entities', {}):
-                    # Entities that are in the alert state.
-                    redis_entities = self.con.smembers('zmon:alerts:{}'.format(alert_id))
-                    alert_entities = set(kwargs['alert_entities'][alert_id])
+                self._cleanup_common(p, 'alerts', alert_id, set(entity_id))
+                # All entities matching given alert definition.
+                self.logger.info('Removing entity %s from hash %s', entity_id,
+                                 'zmon:alerts:{}:entities'.format(alert_id))
+                p.hdel('zmon:alerts:{}:entities'.format(alert_id), entity_id)
+                p.delete('zmon:notifications:{}:{}'.format(alert_id, entity_id))
 
-                    # If it happens that we remove all entities for given alert, we should remove all the things.
-                    if not alert_entities:
-                        p.srem('zmon:alerts', alert_id)
-                        p.delete('zmon:alerts:{}'.format(alert_id))
-                        p.delete('zmon:alerts:{}:entities'.format(alert_id))
-                        for entity in redis_entities:
-                            p.delete('zmon:alerts:{}:{}'.format(alert_id, entity))
-                            p.delete('zmon:notifications:{}:{}'.format(alert_id, entity))
-                    else:
-                        self._cleanup_common(p, 'alerts', alert_id, redis_entities - alert_entities)
-                        # All entities matching given alert definition.
-                        all_entities = set(self.con.hkeys('zmon:alerts:{}:entities'.format(alert_id)))
-                        for entity in all_entities - alert_entities:
-                            self.logger.info('Removing entity %s from hash %s', entity,
-                                             'zmon:alerts:{}:entities'.format(alert_id))
-                            p.hdel('zmon:alerts:{}:entities'.format(alert_id), entity)
-                            p.delete('zmon:notifications:{}:{}'.format(alert_id, entity))
-                else:
-                    self._cleanup_alert(p, alert_id)
+            check_ids = [c.replace('zmon:checks:', '').replace(':{}'.format(entity_id), '')
+                         for c in self.con.keys('zmon:checks:*:{}'.format(entity_id))]
+            for check_id in check_ids:
+                self._cleanup_common(p, 'checks', check_id, set(entity_id))
 
-            span.log_kv('cleanup_entities', kwargs.get('cleanup_entities', []))
-            for entity_id in kwargs.get('cleanup_entities', []):
-                alert_ids = [a.replace('zmon:alerts:', '').replace(':{}'.format(entity_id), '')
-                             for a in self.con.keys('zmon:alerts:*:{}'.format(entity_id))]
-                for alert_id in alert_ids:
-                    self._cleanup_common(p, 'alerts', alert_id, set(entity_id))
-                    # All entities matching given alert definition.
-                    self.logger.info('Removing entity %s from hash %s', entity_id,
-                                     'zmon:alerts:{}:entities'.format(alert_id))
-                    p.hdel('zmon:alerts:{}:entities'.format(alert_id), entity_id)
-                    p.delete('zmon:notifications:{}:{}'.format(alert_id, entity_id))
-
-                check_ids = [c.replace('zmon:checks:', '').replace(':{}'.format(entity_id), '')
-                             for c in self.con.keys('zmon:checks:*:{}'.format(entity_id))]
-                for check_id in check_ids:
-                    self._cleanup_common(p, 'checks', check_id, set(entity_id))
-
-            p.execute()
+        p.execute()
 
     def _cleanup_check(self, pipeline, check_id):
         self.logger.info('Removing check with id %s from zmon:checks set', check_id)

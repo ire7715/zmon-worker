@@ -1158,6 +1158,24 @@ class MainTask(object):
             else:
                 self._cleanup_alert(p, alert_id)
 
+        span = extract_span_from_kwargs(**kwargs)
+        span.log_kv('cleanup_entities', kwargs.get('cleanup_entities', []))
+        for entity_id in kwargs.get('cleanup_entities', []):
+            alert_ids = [a.replace('zmon:alerts:', '').replace(':{}'.format(entity_id), '')
+                         for a in self.con.keys('zmon:alerts:*:{}'.format(entity_id))]
+            for alert_id in alert_ids:
+                self._cleanup_common(p, 'alerts', alert_id, set(entity_id))
+                # All entities matching given alert definition.
+                self.logger.info('Removing entity %s from hash %s', entity_id,
+                                 'zmon:alerts:{}:entities'.format(alert_id))
+                p.hdel('zmon:alerts:{}:entities'.format(alert_id), entity_id)
+                p.delete('zmon:notifications:{}:{}'.format(alert_id, entity_id))
+
+            check_ids = [c.replace('zmon:checks:', '').replace(':{}'.format(entity_id), '')
+                         for c in self.con.keys('zmon:checks:*:{}'.format(entity_id))]
+            for check_id in check_ids:
+                self._cleanup_common(p, 'checks', check_id, set(entity_id))
+
         p.execute()
 
     def _cleanup_check(self, pipeline, check_id):

@@ -54,4 +54,4 @@ class KmsWrapper(object):
         if encryption_context:
             logger.debug('encryption_context provided: ', encryption_context)
             kwargs['EncryptionContext'] = encryption_context
-        return self._client.decrypt(**kwargs)
+        return self.__client.decrypt(**kwargs)

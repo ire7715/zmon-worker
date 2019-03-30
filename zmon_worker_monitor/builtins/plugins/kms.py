@@ -27,6 +27,7 @@ class KmsWrapperFactory(IFunctionFactoryPlugin):
         """
         return propartial(KmsWrapper, region=factory_ctx.get('entity').get('region', None))
 
+
 class KmsWrapper(object):
     def __init__(self, region=None, assume_role_arn=None):
         if not region:
@@ -49,7 +50,7 @@ class KmsWrapper(object):
         :param encryption_context: (dict) optional, encryption_context that was specified when encrypting.
         :return: (bytes) plaintext blob
         """
-        kwargs = { 'CiphertextBlob': ciphertext_blob }
+        kwargs = {'CiphertextBlob': ciphertext_blob}
         if encryption_context:
             logger.debug('encryption_context provided: ', encryption_context)
             kwargs['EncryptionContext'] = encryption_context

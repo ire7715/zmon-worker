@@ -1,4 +1,3 @@
-import pytest
 from zmon_worker_monitor.builtins.plugins.kms import KmsWrapper
 
 from mock import MagicMock
